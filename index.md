@@ -115,11 +115,10 @@ type unitTestData struct {
     method               string      // request method being tested
     expectedResponseCode int         // the response code the server should send
     expectedResponseData string      // the data we expect to see in the response
-    postData             interface{} // data we send to the server
 }
 ```
 
-This should allow us to define a simple test to ensure that when we make a `GET` request to `/` we get back back `{"status": "okay"}`. I've added `postData` as an `interface{}` for now because we're not actually going to post any data to our end point, but so that both a failing and passing test can be demonstrated, I'll show the code for making a `GET` request and a `POST` request.
+This should allow us to define a simple test to ensure that when we make a `GET` request to `/` we get back back `{"status": "okay"}`.
 
 ### The TestIndexHandler function
 
@@ -275,3 +274,408 @@ PASS
 ```
 
 You'll notice this method keeps very clear exactly what's going on in our test, the output is concise and lets us know exactly what step we were on when any failure happensed.
+
+## Adding a test for a new route
+
+Before you've gotten to this point you have hopefully planned out your API such that you know what each route is going to expect and what it's going to return. I find myself spending a lot of time in front of a dry erase board during this process as I shuffle around what should go where as my little API microservice takes shape.
+
+I'm going to implement the handler for the `/check` route, this is going to be the most code intensive section and I'm going to be moving between files quickly (as well as adding a few new files). In order to implement this function, I need to do some planning. I am going to do that planning in the form of simply writing out the list of tests I'd like to put together in plain English such that anyone can read and provide feedback on this process:
+
+1. Test that `GET` requests to `/check` return Method Not Allowed.
+2. Test that empty `POST` requests get back a 403 Forbidden.
+3. Test that a `POST` request with an invalid passphrase returns a 403 Forbidden.
+4. Test that a `POST` request with a valid passphrase but invalid VLAN request returns a Bad Request error.
+5. Test that a `POST` request with a valid passphrase and valid VLAN returns back some expected output
+
+The first test is to ensure that routes for which we *have not explicitely* bound a handler to do not suddenly start working, for example, if the underlying library changes it's default behavior at some point in the future, this test would help prevent us from putting out potentially broken code. It's also a great place to start in writing our tests.
+
+Before we can get back to our test, let's bind the `/check` route and setup it's function by copying the `IndexHandler` func. Inside of the `server.go`'s `initRoutes` function, update it so that it looks like this:
+
+```golang
+func initRoutes(a *fiber.App) {
+    a.Get("/", func(c *fiber.Ctx) error {
+        return indexHandler(c)
+    })
+    a.Post("/check", func(c *fiber.Ctx) error {
+        return checkHandler(c)
+    })
+}
+```
+
+Now add the `checkHandler` function to `handlers.go` by just duplicating the `indexHandler`:
+
+```golang
+func checkHandler(c *fiber.Ctx) error {
+    r := make(map[string]string)
+    r["status"] = "ok"
+    return c.JSON(r)
+}
+```
+
+Perfect, now we can start writing the **failing** tests for this function. Move over to `handlers_test.go` and add a new test for the brand new route.
+
+```golang
+func TestCheckHandler(t *testing.T) {
+    tests := []unitTestData{
+        {
+            description:          "Test GET request",
+            route:                "/check",
+            method:               "GET",
+            expectedResponseCode: http.StatusMethodNotAllowed,
+            expectedResponseData: "Method Not Allowed",
+        },
+    }
+    app := NewServer()
+    t.Log("====> TESTING ROUTE: /check")
+    doRequests(t, app, tests)
+}
+```
+
+Now the first test matches the description of the first test above. Because in the `server.go` file I only bound this route to `POST` requests, the first test should "just work" -- the best kind of work:
+
+```console
+go test -v -run TestCheckHandler       
+=== RUN   TestCheckHandler
+    handlers_test.go:105: ====> TESTING ROUTE: /check
+    handlers_test.go:112: ======> Test GET request
+    handlers_test.go:131: ========> response status: 405
+    handlers_test.go:141: ========> response body:
+        Method Not Allowed
+--- PASS: TestCheckHandler (0.00s)
+PASS
+```
+
+It's also a great time to point out that you can narrow the scope of the tests you are running with the `-run` flag and then the name of the test you want to execute. Since that worked, add a second test, this time for a POST request by updating the `tests` slice in the `TestCheckHandler` function:
+
+```golang
+    tests := []unitTestData{
+        {
+            description:          "Test GET request",
+            route:                "/check",
+            method:               "GET",
+            expectedResponseCode: http.StatusMethodNotAllowed,
+            expectedResponseData: "Method Not Allowed",
+        },
+        {
+            description:          "Test POST request with no credentials",
+            route:                "/check",
+            method:               "POST",
+            expectedResponseCode: http.StatusForbidden,
+            expectedResponseData: "{\"error\":\"forbidden\",\"status\":\"error\"}",
+        },
+    }
+```
+
+Running this test results in a `200 OK` -- which, in this case, is a failure:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:105: ====> TESTING ROUTE: /check
+    handlers_test.go:112: ======> Test GET request
+    handlers_test.go:131: ========> response status: 405
+    handlers_test.go:141: ========> response body:
+        Method Not Allowed
+    handlers_test.go:112: ======> Test POST request with no credentials
+    handlers_test.go:129: Expected response code 403, got 200
+    handlers_test.go:131: ========> response status: 200
+    handlers_test.go:139: Expected a body of:
+        {"error":"forbidden","status":"error"}
+        instead got:
+        {"status":"ok"}
+    handlers_test.go:141: ========> response body:
+        {"status":"ok"}
+--- FAIL: TestCheckHandler (0.00s)
+FAIL
+exit status 1
+```
+
+### Putting the "development" in TDD
+
+In order to start making this route work the way I want it to, there is a *lot* of implied functionality. Taking it in bite sized chunks, the first thing I need to know is what the client should send to actually trigger a scan? There are so many ways to go about this, I am going to pick about this simplest. If this were an application actually being deployed, you'd probably want to investigate in something like JWT for auth and not this simple, in-line solution I'm putting here. That being said, I need a new file!
+
+I made a `types.go` file to keep track of various requests, responses, configuration and whatever other type I might end up needing. For now, my `types.go` just contains the following:
+
+```golang
+package nmapserver
+
+type VlanScanRequest struct {
+    Name           string `json:"name"`
+    ScanPassphrase string `json:"scan_password"`
+}
+```
+
+I know I want the request to contain, at a minimum, a VLAN to return data for and a passphrase so that someone can't just go triggering `nmap` scans in my environment.
+
+There are **lots** of ways to do this, but this is a crucial point where early on, I would go off the rails here. The test I'm writing does not require a lot! It simply requires that an **empty** `POST` requests return forbidden with proper JSON. Nothing fancy, here's what I came up with:
+
+```golang
+func checkHandler(c *fiber.Ctx) error {
+    r := make(map[string]string)
+    scanRequestData := new(VlanScanRequest)
+    if err := c.BodyParser(scanRequestData); err != nil {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    r["status"] = "ok"
+    return c.JSON(r)
+}
+```
+
+The test now passes even though we don't yet have any logic around this, that's okay, that's not what this test was for!
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:105: ====> TESTING ROUTE: /check
+    handlers_test.go:112: ======> Test GET request
+    handlers_test.go:131: ========> response status: 405
+    handlers_test.go:141: ========> response body:
+        Method Not Allowed
+    handlers_test.go:112: ======> Test POST request with no credentials
+    handlers_test.go:131: ========> response status: 403
+    handlers_test.go:141: ========> response body:
+        {"error":"forbidden","status":"error"}
+--- PASS: TestCheckHandler (0.00s)
+PASS
+```
+
+The next test is to provide an **invalid** passphrase to the endpoint. Because I have not yet added any code to deal with the parsed input from the `BodyParser` adding the test will result in a failing test that I will, again, go fix in code after the test case is added. In `handlers_test.go` I'm adding more to the `tests` slice in the `TestCheckHandler` method. To save space here, I am *only* showing the `unitTestData` element for the *newly added* test:
+
+```golang
+        {
+            description:          "Test POST request with invalid credentials",
+            route:                "/check",
+            method:               "POST",
+            expectedResponseCode: http.StatusForbidden,
+            expectedResponseData: "{\"error\":\"forbidden\",\"status\":\"error\"}",
+            postData: VlanScanRequest{
+                Name:           "foo",
+                ScanPassphrase: "INVALIDSCANPASSWORD",
+            },
+        },
+```
+
+The field `postData` did not exist in the `unitTestData` type, so add that up at the top of the `handlers_test.go` inside the struct definition:
+
+```golang
+type unitTestData struct {
+    description          string      // description of the test
+    route                string      // route that we're testing
+    method               string      // request method being tested
+    expectedResponseCode int         // the response code the server should send
+    expectedResponseData string      // the data we expect to see in the response
+    postData             interface{} // data we send to the server
+}
+```
+
+Because the `postData` can be anything, I just made it an interface. In this case, I'm putting a `VlanScanRequest` there.
+
+It's at this point that I also have to put in some accounting for POST requests into the `doRequests` function in my `handlers_test.go` file. I've rewritten the function so that it now looks like this:
+
+```golang
+func doRequests(t *testing.T, app *fiber.App, tests []unitTestData) {
+    for _, test := range tests {
+        t.Logf("======> %s", test.description)
+        var req *http.Request
+        if test.method == "POST" {
+            // if POSTing submit data, if the field isn't set this
+            // will still work.
+            requestByteArray, err := json.Marshal(test.postData)
+            if err != nil {
+                t.Errorf("Failed to encode request data into byte array:\n%v", err)
+            }
+            req = httptest.NewRequest(test.method, test.route, bytes.NewBuffer(requestByteArray))
+            // if we don't submit this as json it will fail to parse
+            req.Header.Add("Content-Type", "application/json")
+        } else {
+            req = httptest.NewRequest(test.method, test.route, nil)
+        }
+        resp, _ := app.Test(req, -1)
+        if resp.StatusCode != test.expectedResponseCode {
+            t.Errorf("Expected response code %d, got %d", test.expectedResponseCode, resp.StatusCode)
+        }
+        t.Logf("========> response status: %d", resp.StatusCode)
+        b, err := io.ReadAll(resp.Body)
+        if err != nil {
+            t.Errorf("Got error decoding resp.body: %s", err.Error())
+        }
+        if string(b) != test.expectedResponseData {
+            t.Errorf("Expected a body of:\n%s\ninstead got:\n%s", test.expectedResponseData, string(b))
+        }
+        t.Logf("========> response body:\n%s", string(b))
+    }
+}
+```
+
+This is very similar to the old code except that if it's a `POST` request it'll marshall up the value of `test.postData` and send it to the app. Now that the test harness supports `POST` data I can re-run the test and see what kind of output I get:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:107: ====> TESTING ROUTE: /check
+    handlers_test.go:114: ======> Test GET request
+    handlers_test.go:133: ========> response status: 405
+    handlers_test.go:143: ========> response body:
+        Method Not Allowed
+    handlers_test.go:114: ======> Test POST request with no credentials
+    handlers_test.go:131: Expected response code 403, got 200
+    handlers_test.go:133: ========> response status: 200
+    handlers_test.go:141: Expected a body of:
+        {"error":"forbidden","status":"error"}
+        instead got:
+        {"status":"ok"}
+    handlers_test.go:143: ========> response body:
+        {"status":"ok"}
+    handlers_test.go:114: ======> Test POST request with invalid credentials
+    handlers_test.go:131: Expected response code 403, got 200
+    handlers_test.go:133: ========> response status: 200
+    handlers_test.go:141: Expected a body of:
+        {"error":"forbidden","status":"error"}
+        instead got:
+        {"status":"ok"}
+    handlers_test.go:143: ========> response body:
+        {"status":"ok"}
+--- FAIL: TestCheckHandler (0.00s)
+FAIL
+exit status 1
+```
+
+The astute reader might notice something that's happened with this latest run. Because the test harness makes a `POST` request, the second test which was passing is now failing. This is because go-fiber's `BodyParser` function didn't return an error, it just didn't unmarshall any values into the `scanRequestData` variable! This is **extremely common** in test driven development, and this iterative cycle is what's going to ensure robust testing of your API endpoints.
+
+### Fixing the second test
+
+In order to fix the second test, we need to check the length of the decoded passphrase value to ensure it's not equal to 0. I've updated the `checkHandler` code as follows:
+
+```golang
+func checkHandler(c *fiber.Ctx) error {
+    r := make(map[string]string)
+    scanRequestData := new(VlanScanRequest)
+    if err := c.BodyParser(scanRequestData); err != nil {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    if len(scanRequestData.ScanPassphrase) == 0 {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    r["status"] = "ok"
+    return c.JSON(r)
+}
+```
+
+This now ensures that a passphrase is required to be sent along, and if it isn't, the application will return a 403 forbidden. Additionally, only the newest test is failing:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:107: ====> TESTING ROUTE: /check
+    handlers_test.go:114: ======> Test GET request
+    handlers_test.go:133: ========> response status: 405
+    handlers_test.go:143: ========> response body:
+        Method Not Allowed
+    handlers_test.go:114: ======> Test POST request with no credentials
+    handlers_test.go:133: ========> response status: 403
+    handlers_test.go:143: ========> response body:
+        {"error":"forbidden","status":"error"}
+    handlers_test.go:114: ======> Test POST request with invalid credentials
+    handlers_test.go:131: Expected response code 403, got 200
+    handlers_test.go:133: ========> response status: 200
+    handlers_test.go:141: Expected a body of:
+        {"error":"forbidden","status":"error"}
+        instead got:
+        {"status":"ok"}
+    handlers_test.go:143: ========> response body:
+        {"status":"ok"}
+--- FAIL: TestCheckHandler (0.00s)
+FAIL
+exit status 1
+```
+
+### Back to Test 3
+
+Now that the second test is passing I need a way to actually check if the provided scanner passphrase is the right one or not. I also need to set the passphrase in a few places. First, I want to make a variable to hold this value. I've chosen to put this in the top of the `server.go` as one would probably expect to find it:
+
+```golang
+import (
+    "github.com/gofiber/fiber/v2"
+)
+
+var (
+    scanPassphrase string
+)
+
+func NewServer(passphrase string) *fiber.App {
+    server := fiber.New()
+    scanPassphrase = passphrase
+    initRoutes(server)
+    return server
+}
+```
+
+I've added an argument to the `NewServer` function requiring a passphrase. I've then assigned whatever is set there to the `scanPassphrase` variable so that it can be accessed by the various handlers.
+
+This means I need to also update `handlers_test.go` as it is creating an instance of `NewServer`. Because in each handler function I create an instance of the `NewServer` app, it'll be easiest to set a variable at the top of the `handlers_test.go`:
+
+```golang
+var (
+    testScanPassphrase string = "DONOTSCAN"
+)
+```
+
+Then, anywhere `NewServer` is called, add this variable:
+
+```golang
+app := NewServer(testScanPassphrase)
+```
+
+Finally, back in `handlers.go` update the `checkHandler` function to check the passphrase:
+
+```golang
+func checkHandler(c *fiber.Ctx) error {
+    r := make(map[string]string)
+    scanRequestData := new(VlanScanRequest)
+    if err := c.BodyParser(scanRequestData); err != nil {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    if len(scanRequestData.ScanPassword) == 0 {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    if scanRequestData.ScanPassword != scanPassphrase {
+        r["status"] = "error"
+        r["error"] = "forbidden"
+        return c.Status(fiber.StatusForbidden).JSON(r)
+    }
+    r["status"] = "ok"
+    return c.JSON(r)
+}
+```
+
+With this check in place the test now passes, with 3 of the 5 desired tested behaviors functioning:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:111: ====> TESTING ROUTE: /check
+    handlers_test.go:118: ======> Test GET request
+    handlers_test.go:137: ========> response status: 405
+    handlers_test.go:147: ========> response body:
+        Method Not Allowed
+    handlers_test.go:118: ======> Test POST request with no credentials
+    handlers_test.go:137: ========> response status: 403
+    handlers_test.go:147: ========> response body:
+        {"error":"forbidden","status":"error"}
+    handlers_test.go:118: ======> Test POST request with invalid credentials
+    handlers_test.go:137: ========> response status: 403
+    handlers_test.go:147: ========> response body:
+        {"error":"forbidden","status":"error"}
+--- PASS: TestCheckHandler (0.00s)
+PASS
+```
