@@ -542,7 +542,7 @@ FAIL
 exit status 1
 ```
 
-The astute reader might notice something that's happened with this latest run. Because the test harness makes a `POST` request, the second test which was passing is now failing. The reason is because go-fiber's `BodyParser` function didn't return an error, it just didn't unmarshall any values into the `scanRequestData` variable! This is **extremely common** in test driven development, and this iterative cycle is what's going to ensure robust testing of your API endpoints. 
+The astute reader might notice something that's happened with this latest run. Because the test harness makes a `POST` request, the second test which was passing is now failing. The reason is because go-fiber's `BodyParser` function didn't return an error, it just didn't unmarshall any values into the `scanRequestData` variable! This is **extremely common** in test driven development, and this iterative cycle is what's going to ensure robust testing of your API endpoints.
 
 ### Fixing the second test
 
@@ -638,8 +638,7 @@ app := NewServer(testScanPassphrase)
 
 The above will be inside of each Handler function.
 
-
-Finally, back in `handlers.go` update the `checkHandler` function to check the passphrase:
+Back in `handlers.go` update the `checkHandler` function to check the passphrase:
 
 ```golang
 func checkHandler(c *fiber.Ctx) error {
@@ -846,7 +845,7 @@ func checkHandler(c *fiber.Ctx) error {
 }
 ```
 
-This should be enough to make the 4th test case to be in a passing state:
+This should be enough to put the 4th test case into a passing state:
 
 ```console
 go test -v -run TestCheckHandler
@@ -862,3 +861,288 @@ go test -v -run TestCheckHandler
 PASS
 ```
 
+### Test 5 - A Valid Request
+
+Implementing the code to complete the final test as defined is going to address two new, but very commonly encountered problems:
+
+1. How do I validate a complex response body using this design paradigm?
+2. How do I test this route *without* triggering an nmap scan? Is it still useful?
+
+There are many ways to prevent certain parts of your code from executing, or executing differently depending on the environment. One way to address this would be through the use of environment variables, and if I were deploying this, that's probably what I would do...but because that's the most obvious I wanted to share another, less obvious way you can control code execution depending on if you're executing tests or not. Remember the `testScanPassphrase` variable I set at the top of the `handlers_test.go` file? I set that value to `DONOTSCAN` -- I think you can see where I'm going with this.
+
+Before I get to implementing how the `DONOTSCAN` code path branching works I have to actually author the failing test, I can't forget to let testing drive my development, even as things start to become more complex and I see more moving parts supporting my test. There are three more fields that the `unitTestData` type requires in order to be able to parse a complex response.
+
+I'd like the response from the API to contain: name, nmap range scanned, the last scanned date, a list of responsive hosts and the total number of hosts alive. I only care about testing some of these fields for now, for example, there's no reason to test equality for the last scanned field.
+
+I have updated the top of my `handlers_test.go` file to contain the three new fields in the `unitTestData` struct:
+
+```golang
+type unitTestData struct {
+    description          string           // description of the test
+    route                string           // route that we're testing
+    method               string           // request method being tested
+    expectedResponseCode int              // the response code the server should send
+    expectedResponseData string           // the data we expect to see in the response
+    postData             interface{}      // data we send to the server
+    expectedData         interface{}      // the data that we expect to get back
+    responseFunc         testResponseFunc // the function that will validate API output
+    runResponseFunc      bool             // run the above function
+}
+```
+
+The `responseFunc` field actually takes generic type, anything that takes as an arg `[]byte` and `interface{}` and returns a `bool` fulfills the `responseFunc` type. I can use this to write custom parsing for each response type **or** response route. To define this interface, I added the following to the top of my `handlers_test.go` file:
+
+```golang
+type testResponseFunc func([]byte, interface{}) bool
+```
+
+From here, I can add my 5th and final test case into the slice of tests. Once again, I'll omit the previous cases and only show the most recent:
+
+```golang
+        {
+            description:          "Test POST request with valid credentials and valid VLAN",
+            route:                "/check",
+            method:               "POST",
+            expectedResponseCode: http.StatusOK,
+            postData: VlanScanRequest{
+                Name:         "testvlan111",
+                ScanPassword: testScanPassphrase,
+            },
+            responseFunc: validateVLANResponseOutput,
+            expectedData: VlanResponse{
+                Name:            "testvlan111",
+                NmapRange:       "127.0.0.50-250",
+                ResponsiveHosts: []string{"127.0.0.50", "127.0.0.51"},
+                HostsAlive:      2,
+            },
+            runResponseFunc: true,
+        },
+```
+
+For `responseFunc` I provided another function which I have not yet written *because* I need to first add the `VLANResponse` type which the `/check` route should ultimately respond with as per the `expectedData` field.
+
+In the `types.go` file add a type for `VLANResponse`:
+
+```golang
+type VlanResponse struct {
+    Name            string   `json:"name"`
+    NmapRange       string   `json:"nmap_range"`
+    LastScannedDate string   `json:"last_scanned_date"`
+    ResponsiveHosts []string `json:"responsive_hosts"`
+    HostsAlive      int      `json:"hosts_alive"`
+}
+```
+
+With this type defined, I can go back to the `handlers_test.go` file and the `validateVLANResponseOutput` function.
+
+> **A thought on organizing** -- you might find yourself wondering how to break up the `responseFunc` values. In my experience, have one function per type and leverage the `expectedData` to validate different your various test cases.
+
+The `validateVLANResponseOutput` function:
+
+```golang
+func validateVLANResponseOutput(serverResponse []byte, expectedData interface{}) bool {
+    var server_data VlanResponse
+    err := json.Unmarshal(serverResponse, &server_data)
+    if err != nil {
+        return false
+    }
+    if ex_data, ok := expectedData.(VlanResponse); ok {
+        var r bool = true
+        if server_data.Name != ex_data.Name {
+            r = false
+        }
+        if server_data.NmapRange != ex_data.NmapRange {
+            r = false
+        }
+        if server_data.HostsAlive != ex_data.HostsAlive {
+            r = false
+        }
+        if len(server_data.ResponsiveHosts) != len(ex_data.ResponsiveHosts) {
+            r = false
+        }
+        return r
+    } else {
+        return false
+    }
+}
+```
+
+Now that this function exists, the `doRequest` function also needs to be modified to reflect the fact that these new fields exist and that I need to do something with them. The end of the function now includes this code:
+
+```golang
+        // this was in the previous function
+        if err != nil {
+            t.Errorf("Got error decoding resp.body: %s", err.Error())
+        }
+        // This is all new stuff
+
+        // sometimes it doesn't make sense to compare a string, but to
+        // ensure that data decodes properly
+        if test.runResponseFunc {
+            t.Logf("========> Testing equality between response and expectedData")
+            // should we run a custom function to test the response
+            if !test.responseFunc(b, test.expectedData) {
+                t.Errorf("Two values are not equal.\nResponse:%v\nExpected Data:\n%v", string(b), test.expectedData)
+            }
+        } else {
+            // this was the only thing that was done before
+            if string(b) != test.expectedResponseData {
+                t.Errorf("Expected a body of:\n%s\ninstead got:\n%s", test.expectedResponseData, string(b))
+            }
+        }
+        t.Logf("========> response body:\n%s", string(b))
+```
+
+With these changes in place, I can now run the `TestCheckHandler` test again and confirm that the server sends back `{"status": "ok"}` instead if the VLAN data I've defined in the test:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    [ ... Output for Previous 4 Tests ... ]
+    handlers_test.go:149: ======> Test POST request with valid credentials and valid VLAN
+    handlers_test.go:168: ========> response status: 200
+    handlers_test.go:178: ========> Testing equality between response and expectedData
+    handlers_test.go:181: Two values are not equal.
+        Response:{"status":"ok"}
+        Expected Data:
+        {testvlan111 127.0.0.50-250  [127.0.0.50 127.0.0.51] 2}
+    handlers_test.go:189: ========> response body:
+        {"status":"ok"}
+--- FAIL: TestCheckHandler (0.00s)
+FAIL
+exit status 1
+```
+
+Before diving in, it's important to consider exactly what will be required to get this test functioning. It should take:
+
+1. Call a function from inside the `checkHandler` which will do any pre-flight checks necessary before doing the scan.
+2. This new function should read the scan passphrase to determine if it should shell out and call `nmap` and return the response or, should it return some hard coded data in order to test that the API route is functioning?
+3. Parse either the real or simulated output and return it back to the client.
+
+The most logical thing I could come up with was to create a function called `runNmapScan` which will take the IP range from the configuration as it's only argument. It will return back a slice of strings and optionally an error. I've added this code into the `utils.go` file:
+
+```golang
+func runNmapScan(ipRange string) ([]string, error) {
+    var r []string
+    var nmapResponse string
+    var stderr string
+    var err error
+    if scanPassphrase == "DONOTSCAN" {
+        nmapResponse = execFakeNmapCommand()
+    } else {
+        nmapResponse, stderr, err = execCommand("/usr/bin/nmap", "-sn", ipRange)
+        if err != nil {
+            log.Printf("Got error: %s", stderr)
+            return r, err
+        }
+    }
+    // now we need to parse out just the IP addresses from
+    // the scan and need to append each IP address to the variable r
+    scanner := bufio.NewScanner(strings.NewReader(nmapResponse))
+    for scanner.Scan() {
+        t := scanner.Text()
+        if strings.Contains(t, "Nmap scan report for ") {
+            ip := strings.Replace(t, "Nmap scan report for ", "", -1)
+            r = append(r, ip)
+        }
+    }
+    return r, nil
+}
+```
+
+This new function is where I've implemented the `DONOTSCAN` logic, specifically:
+
+```golang
+   if scanPassphrase == "DONOTSCAN" {
+        nmapResponse = execFakeNmapCommand()
+    } else {
+        nmapResponse, stderr, err = execCommand("/usr/bin/nmap", "-sn", ipRange)
+        if err != nil {
+            log.Printf("Got error: %s", stderr)
+            return r, err
+        }
+    }
+```
+
+There is another function (not shown) which will execute a system command and return back a string for `STDOUT`, `STDERR` as well as any error captured by Go. The `execFakeNmapCommand` function was created by running `nmap` in the environment I intend to deploy to and then modifying it to match what the test actually expects:
+
+```golang
+func execFakeNmapCommand() string {
+    return `
+Starting Nmap 6.40 ( http://nmap.org ) at 2023-02-27 09:16 PDT
+Nmap scan report for 127.0.0.50
+Host is up (0.00036s latency).
+Nmap scan report for 127.0.0.51
+Host is up (0.00030s latency).
+Nmap done: 201 IP addresses (167 hosts up) scanned in 1.22 seconds`
+}
+```
+
+This is effectively a copy/paste from the terminal, and then obviously host `127.0.0.50` or `51` was not really up, this is just to ensure this string output matches what the test case is going to be looking for. It should also be noted that if I was building this for real, there would be much more robust validation on the input and output, as well as test cases around DNS names coming back, that sort of thing. This is not intended to be a **complete** example.
+
+I can finally hook everything together for the `/check` route by adding the following code to the bottom of the `checkHandler` function in the `handlers.go` file:
+
+```golang
+    // all checks seem good, so run the nmap scan
+    hostsUp, err := runNmapScan(scanVLAN.NmapRange)
+    if err != nil {
+        log.Printf("nmap scan failed with following error:\n%v", err)
+        r["status"] = "error"
+        r["error"] = "error running scan, see server logs for details"
+        return c.Status(fiber.StatusInternalServerError).JSON(r)
+    }
+```
+
+One very important note on the above, because you are shelling out and running system commands, just like you should not pass unsanitized input from the client to any applications you're calling, so you also **should NOT** pass back any log data which may have been returned back to the client. This could reveal critical configuration details, always just return a generic message to the client.
+
+Finally, I used the value of `hostsUp` and other details from the request to build a proper `VlanResponse` and return that back to the client:
+
+```golang
+    // now build the VlanResponse struct which is also used to
+    // cache the data to json files on disk
+    vlanResponse := VlanResponse{
+        Name:            scanVLAN.Name,
+        NmapRange:       scanVLAN.NmapRange,
+        LastScannedDate: time.Now().Format("2006-01-02 15:04:05"),
+        ResponsiveHosts: hostsUp,
+        HostsAlive:      len(hostsUp),
+    }
+    return c.JSON(vlanResponse)
+```
+
+I can now re-run the test and see that everything passes:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+    handlers_test.go:116: ====> TESTING ROUTE: /check
+    handlers_test.go:149: ======> Test GET request
+    handlers_test.go:168: ========> response status: 405
+    handlers_test.go:189: ========> response body:
+        Method Not Allowed
+    handlers_test.go:149: ======> Test POST request with no credentials
+    handlers_test.go:168: ========> response status: 403
+    handlers_test.go:189: ========> response body:
+        {"error":"forbidden","status":"error"}
+    handlers_test.go:149: ======> Test POST request with invalid credentials
+    handlers_test.go:168: ========> response status: 403
+    handlers_test.go:189: ========> response body:
+        {"error":"forbidden","status":"error"}
+    handlers_test.go:149: ======> Test POST request with valid credentials and invalid VLAN
+    handlers_test.go:168: ========> response status: 400
+    handlers_test.go:189: ========> response body:
+        {"error":"bad request","status":"error"}
+    handlers_test.go:149: ======> Test POST request with valid credentials and valid VLAN
+    handlers_test.go:168: ========> response status: 200
+    handlers_test.go:178: ========> Testing equality between response and expectedData
+    handlers_test.go:189: ========> response body:
+        {"name":"testvlan111","nmap_range":"127.0.0.50-250","last_scanned_date":"2023-02-28 17:37:09","responsive_hosts":["127.0.0.50","127.0.0.51"],"hosts_alive":2}
+--- PASS: TestCheckHandler (0.00s)
+PASS
+```
+
+### Next Steps
+
+There are more test cases that should be written, I think 5 is enough to demonstrate some of the ways that I have tackled these problems over the years and continue to do so. Using this modular method makes it incredibly easy to keep adding test cases as bugs and new unexpected output are discovered, or even hooking your application up to some automated fuzzing using the concepts outlined here would be trivial.
+
+This sort of application is very easily deployed in a dockerfile, as part of a Kubernetes deployment, or even just building a Go binary and running it on bare metal. It's so flexible that this has become my conceptual glue for addressing building APIs in this space.
