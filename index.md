@@ -10,7 +10,7 @@ In this hypothetical scenario we're going to build a tool which can scan VLANs b
 
 ## A Word About Test Driven Development
 
-In the book "Cloud Native Go" it is emphasized that in order for your tests to drive your development, you must first write a broken test and then get your test to pass by writing the code required to complete the test successfully. More importantly though is what ends up happening when you do this: you write *only the code you need -- nothing more.* As I walk through how I'd tackle this problem space, consider how if we were not writing tests we might accidentally introduce a lot of logic which is beyond the scope of our requirements. In addition to introducing incomplete code which might be in various states of tested, this increases the attack surface of your API for no reason. While the strictest interpretations of TDD are not something I'm going to walk through here, we're primarily embracing any philosophy that minimizes extra code...especially extra code which may not be exercised often.
+In the book "Cloud Native Go" it is emphasized that in order for your tests to drive your development, you must first write a broken test and then get your test to pass by writing the code required to complete the test successfully. More importantly though is what ends up happening when you do this: you write *only the code you need -- nothing more.* As I walk through how I'd tackle this problem space, consider how if we were not writing tests we might accidentally introduce a lot of logic which is beyond the scope of our requirements. In addition to introducing incomplete code which might be in various states of tested, this increases the attack surface of your API for no reason. While the strictest interpretations of TDD are not something I'm going to walk through here, we're primarily embracing any philosophy that minimizes extra code...especially extra code which may not be exercised often (or possibly ever since it was added).
 
 ## Setting Up the Project
 
@@ -102,7 +102,7 @@ This is going to be the most complex bit, I'm going to try to break it down into
 4. **Stub Functions**: You will need functions that can return output as if it were your real function when it's not practical to, for example, you can't run `nmap` as part of your TDD as it's not practical, safe, or likely to give you the desired results of your target environment.
 5. **Output Validation Functions**: The response your test gets may be complex and you will likely need to parse the output carefully.
 
-In order to get our test running, we need to at least do the first 3. Go is very easy to refactor as you need additional fields, so don't guess about what you'll need, only implement what you actually need right now.
+In order to get our test running, we need to at least do the first 3. In my experience, Go is very easy to refactor as you build like this, so it's better to wait to add fields as you need them rather than try to anticipate your future needs. I think modifying your past assumptions is almost always harder than implementing a small new piece of functionality.
 
 ### The Test Struct
 
@@ -210,7 +210,7 @@ PASS
 
 ### Adding POST Requests
 
-The first test I'll add is just a `POST` request to the main function. It should be fine to add this as we should get a method not allowed response as we did not bind `/` to a handler that supports `POST` requests in the `server.go` file. To test that, I've updated the tests struct in the `TestIndexHandler` function as follows:
+The first test I'll add is just a `POST` request to the default handler function. It should be fine to add this as I should get a method not allowed response because I did not bind `/` to a handler that supports `POST` requests in the `server.go` file. To test that, I've updated the tests struct in the `TestIndexHandler` function as follows:
 
 ```golang
     tests := []unitTestData{
@@ -231,9 +231,9 @@ The first test I'll add is just a `POST` request to the main function. It should
     }
 ```
 
-For the `expectedResponseCode`, I expect that using the wrong method should return a `405` error. For the text, I'm not actually sure what it will return without running, but I expect it will not be `JSON` as our test is not setting the `application/JSON` header type.
+For the `expectedResponseCode`, I expect that using the wrong method should return a `405` error. For the text, I'm not actually sure what it will return without running it, but I expect it will not be `JSON` as our test is not setting the `application/JSON` header type...
 
-Running the test reveals this isn't quite right:
+Running the test reveals this isn't quite right, but it's extremely close:
 
 ```console
 go test -v
@@ -277,9 +277,9 @@ You'll notice this method keeps very clear exactly what's going on in our test, 
 
 ## Adding a test for a new route
 
-Before you've gotten to this point you have hopefully planned out your API such that you know what each route is going to expect and what it's going to return. I find myself spending a lot of time in front of a dry erase board during this process as I shuffle around what should go where as my little API microservice takes shape.
+Before you've gotten to this point you have hopefully planned out your API such that you know what each route is going to expect and what it's going to return. I find myself spending a lot of time in front of a dry erase board during this process as I shuffle around what should go where.
 
-I'm going to implement the handler for the `/check` route, this is going to be the most code intensive section and I'm going to be moving between files quickly (as well as adding a few new files). In order to implement this function, I need to do some planning. I am going to do that planning in the form of simply writing out the list of tests I'd like to put together in plain English such that anyone can read and provide feedback on this process:
+I'm going to implement the handler for the `/check` route next. This is going to be the most code intensive section and I'm going to be moving between files quickly (as well as adding a few new files). In order to implement this function, I need to do some planning. I am going to do that planning in the form of writing out the list of tests I'd like to put together in plain English such that anyone can read and provide feedback on this process:
 
 1. Test that `GET` requests to `/check` return Method Not Allowed.
 2. Test that empty `POST` requests get back a 403 Forbidden.
@@ -287,9 +287,9 @@ I'm going to implement the handler for the `/check` route, this is going to be t
 4. Test that a `POST` request with a valid passphrase but invalid VLAN request returns a Bad Request error.
 5. Test that a `POST` request with a valid passphrase and valid VLAN returns back some expected output
 
-The first test is to ensure that routes for which we *have not explicitely* bound a handler to do not suddenly start working, for example, if the underlying library changes it's default behavior at some point in the future, this test would help prevent us from putting out potentially broken code. It's also a great place to start in writing our tests.
+The first test is to ensure that routes for which we *have not explicitely* bound a handler to do not suddenly start working, for example, if the underlying library changes it's default behavior at some point in the future, this test would help prevent us from putting out potentially broken code. It's also a great place to start in writing my tests.
 
-Before we can get back to our test, let's bind the `/check` route and setup it's function by copying the `IndexHandler` func. Inside of the `server.go`'s `initRoutes` function, update it so that it looks like this:
+Before I can get back to our test, I need to bind the `/check` route and setup it's function. Inside of the `server.go`'s `initRoutes` function, update it so that it looks like this:
 
 ```golang
 func initRoutes(a *fiber.App) {
@@ -302,7 +302,7 @@ func initRoutes(a *fiber.App) {
 }
 ```
 
-Now add the `checkHandler` function to `handlers.go` by just duplicating the `indexHandler`:
+Now add the `checkHandler` function to `handlers.go` by just copy and pasting the `indexHandler` function then changing it's name:
 
 ```golang
 func checkHandler(c *fiber.Ctx) error {
@@ -312,7 +312,7 @@ func checkHandler(c *fiber.Ctx) error {
 }
 ```
 
-Perfect, now we can start writing the **failing** tests for this function. Move over to `handlers_test.go` and add a new test for the brand new route.
+Now I can start writing the **failing** tests for this function. It's time to open `handlers_test.go` back up and add a new test for the brand new route.
 
 ```golang
 func TestCheckHandler(t *testing.T) {
@@ -392,7 +392,7 @@ exit status 1
 
 ### Putting the "development" in TDD
 
-In order to start making this route work the way I want it to, there is a *lot* of implied functionality. Taking it in bite sized chunks, the first thing I need to know is what the client should send to actually trigger a scan? There are so many ways to go about this, I am going to pick about this simplest. If this were an application actually being deployed, you'd probably want to investigate in something like JWT for auth and not this simple, in-line solution I'm putting here. That being said, I need a new file!
+In order to start making this route work the way I want it to, there is a *lot* of implied functionality. Taking it in bite sized chunks, the first thing I need to know is what the client should send to actually trigger a scan. There are so many ways to go about this, I am going to pick about the simplest I can imagine. If this were an application actually being deployed, you'd probably want to investigate in something like JWT for auth, but this will be easier to follow. That being said, I need a new file!
 
 I made a `types.go` file to keep track of various requests, responses, configuration and whatever other type I might end up needing. For now, my `types.go` just contains the following:
 
@@ -407,7 +407,7 @@ type VlanScanRequest struct {
 
 I know I want the request to contain, at a minimum, a VLAN to return data for and a passphrase so that someone can't just go triggering `nmap` scans in my environment.
 
-There are **lots** of ways to do this, but this is a crucial point where early on, I would go off the rails here. The test I'm writing does not require a lot! It simply requires that an **empty** `POST` requests return forbidden with proper JSON. Nothing fancy, here's what I came up with:
+There are **lots** of ways to do this! This is a crucial point in development, early on in my Go development career, I would go off the rails here adding all sorts of functionality. The test I'm writing does not require a lot functionality! It simply requires that **empty** `POST` requests return a forbidden with proper JSON. Nothing fancy, here's what I came up with:
 
 ```golang
 func checkHandler(c *fiber.Ctx) error {
@@ -441,7 +441,7 @@ go test -v -run TestCheckHandler
 PASS
 ```
 
-The next test is to provide an **invalid** passphrase to the endpoint. Because I have not yet added any code to deal with the parsed input from the `BodyParser` adding the test will result in a failing test that I will, again, go fix in code after the test case is added. In `handlers_test.go` I'm adding more to the `tests` slice in the `TestCheckHandler` method. To save space here, I am *only* showing the `unitTestData` element for the *newly added* test:
+The next test is to provide an **invalid** passphrase to the endpoint. Because I have not yet added any code to deal with the parsed input from the `BodyParser` adding the test will result in a failing test that I will, again, go fix in code after the test case is added. In `handlers_test.go` I'm adding more to the `tests` slice in the `TestCheckHandler` function. To save space here, I am *only* showing the `unitTestData` element for the **newly added** test:
 
 ```golang
         {
@@ -542,11 +542,11 @@ FAIL
 exit status 1
 ```
 
-The astute reader might notice something that's happened with this latest run. Because the test harness makes a `POST` request, the second test which was passing is now failing. This is because go-fiber's `BodyParser` function didn't return an error, it just didn't unmarshall any values into the `scanRequestData` variable! This is **extremely common** in test driven development, and this iterative cycle is what's going to ensure robust testing of your API endpoints.
+The astute reader might notice something that's happened with this latest run. Because the test harness makes a `POST` request, the second test which was passing is now failing. The reason is because go-fiber's `BodyParser` function didn't return an error, it just didn't unmarshall any values into the `scanRequestData` variable! This is **extremely common** in test driven development, and this iterative cycle is what's going to ensure robust testing of your API endpoints. 
 
 ### Fixing the second test
 
-In order to fix the second test, we need to check the length of the decoded passphrase value to ensure it's not equal to 0. I've updated the `checkHandler` code as follows:
+In order to fix the second test, I need to check the length of the decoded passphrase value to ensure it's not equal to 0. I've updated the `checkHandler` code as follows:
 
 ```golang
 func checkHandler(c *fiber.Ctx) error {
@@ -567,7 +567,7 @@ func checkHandler(c *fiber.Ctx) error {
 }
 ```
 
-This now ensures that a passphrase is required to be sent along, and if it isn't, the application will return a 403 forbidden. Additionally, only the newest test is failing:
+This now ensures that a passphrase is required to be sent along, and if it isn't, the application will return a 403 forbidden. Additionally, the second test is fixed and only the newest test is failing:
 
 ```console
 go test -v -run TestCheckHandler
@@ -607,7 +607,11 @@ import (
 var (
     scanPassphrase string
 )
+```
 
+Right after the new variable I also have to update the `NewServer` function.
+
+```golang
 func NewServer(passphrase string) *fiber.App {
     server := fiber.New()
     scanPassphrase = passphrase
@@ -631,6 +635,9 @@ Then, anywhere `NewServer` is called, add this variable:
 ```golang
 app := NewServer(testScanPassphrase)
 ```
+
+The above will be inside of each Handler function.
+
 
 Finally, back in `handlers.go` update the `checkHandler` function to check the passphrase:
 
@@ -658,7 +665,7 @@ func checkHandler(c *fiber.Ctx) error {
 }
 ```
 
-With this check in place the test now passes, with 3 of the 5 desired tested behaviors functioning:
+With this validation in place all 3 tests now pass. 3 of the 5 desired tested behaviors in the outline above are now functioning:
 
 ```console
 go test -v -run TestCheckHandler
@@ -679,3 +686,179 @@ go test -v -run TestCheckHandler
 --- PASS: TestCheckHandler (0.00s)
 PASS
 ```
+
+### Test 4 - Invalid VLAN
+
+Adding this test implies some new functionality that I need to add to the base application. In order to determine if a VLAN is "valid" or "invalid" I need to decide how administrators of this tool are going to define valid VLANs. If I don't have that functionality then I cannot determine if the value is valid or not; in this way, your tests will end up covering more than you initially expect.
+
+Again, to save space, the new test code is isolated below:
+
+```golang
+        {
+            description:          "Test POST request with valid credentials and invalid VLAN",
+            route:                "/check",
+            method:               "POST",
+            expectedResponseCode: http.StatusBadRequest,
+            expectedResponseData: "{\"error\":\"bad request\",\"status\":\"error\"}",
+            postData: VlanScanRequest{
+                Name:         "INVALIDVLAN",
+                ScanPassword: testScanPassphrase,
+            },
+        },
+```
+
+And if I run the test, this returns a `200 OK` which is considered a failure:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+[ ... cutting out other tests ... ]
+    handlers_test.go:118: ======> Test POST request with valid credentials and invalid VLAN
+    handlers_test.go:135: Expected response code 400, got 200
+    handlers_test.go:137: ========> response status: 200
+    handlers_test.go:145: Expected a body of:
+        {"error":"bad request","status":"error"}
+        instead got:
+        {"status":"ok"}
+    handlers_test.go:147: ========> response body:
+        {"status":"ok"}
+--- FAIL: TestCheckHandler (0.00s)
+FAIL
+exit status 1
+```
+
+In order for this test to pass, I need to do two things:
+
+1. Create a way to configure VLANs which should be scanned.
+2. Read configuration and check if a VLAN is valid.
+
+If this was a real production application that is going to be maintained I would probably want the configuration and cached data to be stored in a database of some kind. As that's not really important for the process I'm trying to demonstrate I will juse use good ol' JSON configuration files read from disk. The only configuration information in the VLAN configuration I need is the name of the VLAN and then the range that will be passed in to `nmap`.
+
+Inside the `nmapserver` directory I have created a new folder called `test_data`. Inside of that folder I have created a file called `test_config.json` that contains the following:
+
+```json
+{
+    "vlans": [
+        {
+            "name": "testvlan111",
+            "nmap_range": "127.0.0.50-250"
+        },
+        {
+            "name": "testvlan112",
+            "nmap_range": "127.0.1.50-250"
+        }
+    ]
+}
+```
+
+In order to read this, I need to create a few new types in my `types.go` file:
+
+```golang
+type VLAN struct {
+    Name      string `json:"name"`
+    NmapRange string `json:"nmap_range"`
+}
+
+type VlanConfiguration struct {
+    VLANs []VLAN `json:"vlans"`
+}
+```
+
+With these two added types, I've decided to create a new file called `utils.go` -- this file is for things that aren't related to types, handlers or the server setup. For now, all I'm going to do is is stick a function in there to decode the configuration. Heres the only function in my `utils.go` for now:
+
+```golang
+func decodeVlanConfiguration(path string) (VlanConfiguration, error) {
+    r := VlanConfiguration{}
+    fh, err := os.Open(path)
+    if err != nil {
+        return r, errors.New("Error opening configuration file: " + err.Error())
+    }
+    decoder := json.NewDecoder(fh)
+    err = decoder.Decode(&r)
+    if err != nil {
+        return r, errors.New("Error decoding JSON: " + err.Error())
+    }
+    return r, nil
+}
+```
+
+Now I can decode the configuration, but, like the passPhrase, I need to make the code aware of the path to the configuration file. Just like before, update the `server.go` file to add a variable for this:
+
+```golang
+var (
+    vlanConf       VlanConfiguration
+    scanPassphrase string
+)
+```
+
+Just like before, the `NewServer` function (also in `server.go`) needs another argument so that the code knows what to decode:
+
+```golang
+func NewServer(passphrase, configPath string) *fiber.App {
+    server := fiber.New()
+    var err error
+    vlanConf, err = decodeVlanConfiguration(configPath)
+    if err != nil {
+        log.Fatal("Failed to decode VLAN Configuration:\n" + err.Error())
+    }
+    scanPassphrase = passphrase
+    initRoutes(server)
+    return server
+}
+```
+
+This change has caused another error in `handlers_test.go` -- just like before. I've updated the variables at the top of the `handlers_test.go` file as follows:
+
+```golang
+var (
+    testVLANConfigurationPath string = "test_data/test_config.json"
+    testScanPassphrase        string = "DONOTSCAN"
+)
+```
+
+Additionally, anywhere in this file where `app := NewServer(testScanPassphrase)` appears, I have updated to include the new variable:
+
+```golang
+app := NewServer(testScanPassphrase, testVLANConfigurationPath)
+```
+
+With all of this in place I can now update the `checkHandler` function to check if the VLAN name in the request matches any VLAN name in the configuration. I have updated the `CheckHandler` function inside of the `handlers.go` file so that it now has this code right before it returns an `ok`:
+
+```golang
+func checkHandler(c *fiber.Ctx) error {
+    [... old checkHandler code...]
+    // now verify that the requested VLAN exists in
+    // the configuration
+    var scanVLAN VLAN
+    for _, v := range vlanConf.VLANs {
+        if v.Name == scanRequestData.Name {
+            scanVLAN = v
+        }
+    }
+    // if there is no valid NMAP range, return a bad request
+    if scanVLAN.NmapRange == "" {
+        r["status"] = "error"
+        r["error"] = "bad request"
+        return c.Status(fiber.StatusBadRequest).JSON(r)
+    }
+    r["status"] = "ok"
+    return c.JSON(r)
+}
+```
+
+This should be enough to make the 4th test case to be in a passing state:
+
+```console
+go test -v -run TestCheckHandler
+=== RUN   TestCheckHandler
+
+    [... Previous 3 Tests ...]
+
+    handlers_test.go:120: ======> Test POST request with valid credentials and invalid VLAN
+    handlers_test.go:139: ========> response status: 400
+    handlers_test.go:149: ========> response body:
+        {"error":"bad request","status":"error"}
+--- PASS: TestCheckHandler (0.00s)
+PASS
+```
+
