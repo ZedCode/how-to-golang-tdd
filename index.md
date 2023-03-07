@@ -6,7 +6,7 @@ In this post I'll walk you through how I have tackled this problem dozens of tim
 
 ## The Problem
 
-In this hypothetical scenario we're going to build a tool which can scan VLANs by shelling out and using `nmap` from within a blessed host. In most environments, just running an `nmap` scan against a bunch of hosts to learn things like "did all my VMs become response after deployment?" is hopefully going to set off an IDS. In this example we have a blessed host which nobody will care about nmap traffic coming from, we need to write well tested code which will give SecOps the confidence to let us deploy this into our environment to help increase our automation's visibility :)
+In this hypothetical scenario we're going to build a tool which can scan VLANs by shelling out and using `nmap` from within a blessed host. In most environments, just running an `nmap` scan against a bunch of hosts to learn things like "did all my VMs become responsive after deployment?" is hopefully going to set off an IDS. In this example we have a blessed host which nobody will care about nmap traffic coming from, we need to write well tested code which will give SecOps the confidence to let us deploy this into our environment to help increase our automation's visibility :)
 
 ## A Word About Test Driven Development
 
@@ -1080,6 +1080,8 @@ Nmap done: 201 IP addresses (167 hosts up) scanned in 1.22 seconds`
 
 This is effectively a copy/paste from the terminal, and then obviously host `127.0.0.50` or `51` was not really up, this is just to ensure this string output matches what the test case is going to be looking for. It should also be noted that if I was building this for real, there would be much more robust validation on the input and output, as well as test cases around DNS names coming back, that sort of thing. This is not intended to be a **complete** example.
 
+> **But shouldn't there be tests for using `nmap`?** As I am not an `nmap` developer, my philosophy in test driven development is that I cannot test other people's projects. My job is to test that both expected and unexpected inputs input to the API I am authoring returns safe output. It would be the job of, in this case, `nmap` developers to ensure their product is well tested and works well. As a microservice developer, we're effectively acting as an interface between some project and a web API.
+
 I can finally hook everything together for the `/check` route by adding the following code to the bottom of the `checkHandler` function in the `handlers.go` file:
 
 ```golang
@@ -1146,3 +1148,47 @@ PASS
 There are more test cases that should be written, I think 5 is enough to demonstrate some of the ways that I have tackled these problems over the years and continue to do so. Using this modular method makes it incredibly easy to keep adding test cases as bugs and new unexpected output are discovered, or even hooking your application up to some automated fuzzing using the concepts outlined here would be trivial.
 
 This sort of application is very easily deployed in a dockerfile, as part of a Kubernetes deployment, or even just building a Go binary and running it on bare metal. It's so flexible that this has become my conceptual glue for addressing building APIs in this space.
+
+## Wrapping Up
+
+As I said at the beginning, I would eventually get back to the `main.go` file. There's a couple of interesting things to know about this file. The first is how the `nmapserver` is accessed. At the top of this article I noted that the `go.mod` has in it the following:
+
+```console
+require nmap-api-server.go/nmapserver
+replace nmap-api-server.go/nmapserver => ./nmapserver
+```
+
+This indicates that the import should reference `nmap-api-server.go/nmapserver`. With that knowledge and knowing there are two environment variables to pass to the `nmapserver`:
+
+```golang
+package main
+
+import (
+    "fmt"
+    "log"
+    "os"
+
+    "nmap-api-server.go/nmapserver"
+)
+
+func main() {
+    port := os.Getenv("VLANSERVER_PORT")
+    if len(port) == 0 {
+        port = "8080"
+    }
+    scanPass := os.Getenv("SCAN_PASSPHRASE")
+    if len(scanPass) == 0 {
+        log.Println("SCAN_PASSPHRASE must be a defined environment variable")
+        os.Exit(1)
+    }
+    config := os.Getenv("CONFIG_PATH")
+    if len(config) == 0 {
+        log.Println("CONFIG_PATH must point to a valid configuration file")
+        os.Exit(1)
+    }
+    server := nmapserver.NewServer(config, scanPass)
+    log.Fatalln(server.Listen(fmt.Sprintf(":%v", port)))
+}
+```
+
+In this way the `main.go` file is very generic and just revolves around collecting the information you need to get from the environment. Using environment variables can be a good idea for most configuration as it is easy to integrate with container orchestration, systemd unit files, or even just running the app in a screen session. The flexibility makes this a very reliable approach for most uses. This is **NOT** a good idea for storing/reading passwords. Please use proper secret management for this purpose.
