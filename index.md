@@ -1013,7 +1013,7 @@ FAIL
 exit status 1
 ```
 
-Before diving in, it's important to consider exactly what will be required to get this test functioning. It should take:
+Before diving in, it's important to consider exactly what will be required to get this test functioning. It should:
 
 1. Call a function from inside the `checkHandler` which will do any pre-flight checks necessary before doing the scan.
 2. This new function should read the scan passphrase to determine if it should shell out and call `nmap` and return the response or, should it return some hard coded data in order to test that the API route is functioning?
@@ -1074,13 +1074,13 @@ Nmap scan report for 127.0.0.50
 Host is up (0.00036s latency).
 Nmap scan report for 127.0.0.51
 Host is up (0.00030s latency).
-Nmap done: 201 IP addresses (167 hosts up) scanned in 1.22 seconds`
+Nmap done: 201 IP addresses (2 hosts up) scanned in 1.22 seconds`
 }
 ```
 
 This is effectively a copy/paste from the terminal, and then obviously host `127.0.0.50` or `51` was not really up, this is just to ensure this string output matches what the test case is going to be looking for. It should also be noted that if I was building this for real, there would be much more robust validation on the input and output, as well as test cases around DNS names coming back, that sort of thing. This is not intended to be a **complete** example.
 
-> **But shouldn't there be tests for using `nmap`?** As I am not an `nmap` developer, my philosophy in test driven development is that I cannot test other people's projects. My job is to test that both expected and unexpected inputs input to the API I am authoring returns safe output. It would be the job of, in this case, `nmap` developers to ensure their product is well tested and works well. As a microservice developer, we're effectively acting as an interface between some project and a web API.
+> **But shouldn't there be tests for using `nmap`?** As I am not an `nmap` developer, my philosophy in test driven development is that I cannot test other people's projects. My job is to test that both expected and unexpected inputs to the API I am authoring returns safe output. It would be the job of, in this case, `nmap` developers to ensure their product is well tested and works well. As a microservice developer, we're effectively acting as an interface between some project and a web API.
 
 I can finally hook everything together for the `/check` route by adding the following code to the bottom of the `checkHandler` function in the `handlers.go` file:
 
