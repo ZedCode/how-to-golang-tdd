@@ -32,7 +32,7 @@ I'm starting with a directory structure like this:
 I've run `go mod init` in the root directory and the `nmapserver` directory. In order to refer to `nmapserver` from inside the `main.go` easily, I've added a few lines to my `go.mod` file:
 
 ```console
-require nmap-api-server.go/nmapserver
+require nmap-api-server.go/nmapserver v0.0.0
 
 require (
     [... other requirements...]
@@ -1154,7 +1154,7 @@ This sort of application is very easily deployed in a dockerfile, as part of a K
 As I said at the beginning, I would eventually get back to the `main.go` file. There's a couple of interesting things to know about this file. The first is how the `nmapserver` is accessed. At the top of this article I noted that the `go.mod` has in it the following:
 
 ```console
-require nmap-api-server.go/nmapserver
+require nmap-api-server.go/nmapserver v0.0.0
 replace nmap-api-server.go/nmapserver => ./nmapserver
 ```
 
